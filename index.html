@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- user-scalable=no:避免 iOS 聚焦 14px 输入框时页面被自动放大 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>星空许愿</title>
+<style>
+  /* ========== 全局变量 ========== */
+  :root {
+    /* 毛玻璃参数(来自 star-wish.html),目前用于提示框 */
+    --field: rgba(255, 255, 255, 0.07);       /* 半透明底色 */
+    --field-line: rgba(255, 255, 255, 0.16);  /* 描边色 */
+  }
+
+  /* ========== 基础与画布 ========== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #05070a;
+    color: #fff;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    touch-action: none;                       /* 禁用页面手势,避免滑动/缩放干扰 */
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* 固定 body:防止 iOS 弹出键盘时页面被顶着滚动、背景跟着位移 */
+  body { position: fixed; inset: 0; overscroll-behavior: none; }
+  /* 星空画布:铺满全屏,位于 UI 层之下;实际像素尺寸由 JS 锁定,不随软键盘伸缩 */
+  #starfield { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 1; }
+
+  /* ========== 底部 UI 容器(标题 + 输入框) ========== */
+  .ui-container {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 3;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 20px 20px calc(env(safe-area-inset-bottom, 0px) + 36px);  /* 预留刘海屏/手势条安全区 */
+    pointer-events: none;                     /* 容器本身不拦截点击,让点击穿透到夜空 */
+  }
+  .title {
+    font-size: 17px; font-weight: 300; letter-spacing: 8px; padding-left: 8px;  /* padding-left 抵消末尾字间距,保持视觉居中 */
+    margin-bottom: 8px;
+    text-shadow: 0 0 15px rgba(160, 200, 255, 0.8);
+  }
+  .subtitle {
+    color: #8a9db8; font-size: 12px; letter-spacing: 2px; padding-left: 2px;
+    margin-bottom: 22px;
+  }
+
+  /* ========== 输入框(样式整体来自 star.html) ========== */
+  .input-area {
+    display: flex; width: 100%; max-width: 400px;
+    padding: 5px;
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-top-color: rgba(255, 255, 255, 0.6);   /* 上、左边加亮,模拟玻璃高光 */
+    border-left-color: rgba(255, 255, 255, 0.4);
+    box-shadow: 0 10px 35px rgba(0, 0, 0, 0.7);
+    pointer-events: auto;                     /* 输入区恢复可点击 */
+  }
+  input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: #ffffff; padding: 12px 20px; font-size: 14px;
+    letter-spacing: 1px;
+  }
+  input::placeholder { color: rgba(180, 220, 255, 0.4); }
+  button {
+    background: rgba(255, 255, 255, 0.95); color: #05070a;
+    border: 1px solid rgba(255, 255, 255, 0.8); border-radius: 25px;
+    padding: 10px 30px; font-size: 14px; font-weight: bold;
+    touch-action: manipulation;               /* 去掉移动端双击缩放延迟 */
+  }
+  button:active { transform: scale(0.95); }   /* 按下时轻微缩小 */
+
+  /* ========== 提示框(毛玻璃参数来自 star-wish.html) ========== */
+  #toast {
+    position: fixed; left: 50%; z-index: 4;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 150px);
+    transform: translateX(-50%) translateY(20px);   /* 初始略低于终点,显示时上浮 */
+    background: var(--field);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--field-line);
+    border-top-color: rgba(255, 255, 255, 0.32);    /* 顶部高光,与输入框风格呼应 */
+    font-size: 13px; padding: 10px 22px; border-radius: 25px;
+    opacity: 0; pointer-events: none; white-space: nowrap;
+    transition: opacity 0.5s, transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<canvas id="starfield" aria-label="星空"></canvas>
+<div id="toast">愿望已随流星飞去 ✦</div>
+<div class="ui-container">
+  <div class="title">星空许愿</div>
+  <div class="subtitle">点击夜空,让流星更多</div>
+  <div class="input-area">
+    <input type="text" id="wishInput" placeholder="写下你的愿望…" maxlength="20">
+    <button id="sendBtn">放飞</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  /* ========== 元素与状态 ========== */
+  var canvas = document.getElementById('starfield');
+  var ctx = canvas.getContext('2d');
+  var input = document.getElementById('wishInput');
+  var btn = document.getElementById('sendBtn');
+  var toast = document.getElementById('toast');
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;  // 系统开启"减少动态效果"时降低流星频率
+
+  var W = 0, H = 0, dpr = 1;
+  var stars = [], meteors = [];
+  var ANGLE = Math.PI * 0.76;  // 流星飞行方向:向左下划过
+
+  /* ========== 画布尺寸与星星初始化 ========== */
+  function resize() {
+    var nw = window.innerWidth, nh = window.innerHeight;
+    // 软键盘弹出/收起只会改变高度:忽略它,避免画布被拉伸、星星被重新随机,导致背景跳动
+    if (W && nw === W && (nh === H || document.activeElement === input)) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);   // 限制像素比,兼顾清晰度与性能
+    W = nw; H = nh;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';   // 锁定画布显示尺寸
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var n = Math.round(W * H / 4500);                  // 星星数量随屏幕面积变化
+    stars = [];
+    for (var i = 0; i < n; i++) {
+      stars.push({
+        x: Math.random() * W, y: Math.random() * H,
+        r: Math.random() * 1.3 + 0.4,
+        a: Math.random() * 0.5 + 0.3,                  // 当前亮度
+        v: (Math.random() * 0.012 + 0.003) * (Math.random() < 0.5 ? -1 : 1)  // 闪烁速度,正负随机决定初始明暗方向
+      });
+    }
+  }
+
+  /* ========== 流星:生成 / 绘制 / 定时逻辑(来自 star-wish.html) ========== */
+  // 生成一颗流星;opts 可指定位置、速度、尾长、线宽、愿望文字
+  // 若传入 tx/ty:流星从屏幕边界外飞入,并正好经过该点(用于点击夜空)
+  function spawn(opts) {
+    opts = opts || {};
+    var speed = opts.speed || (4 + Math.random() * 5);
+    var ang = ANGLE + (Math.random() - 0.5) * 0.12;    // 方向加入轻微随机偏转
+    var x = opts.x != null ? opts.x : Math.random() * (W + H * 0.6);
+    var y = opts.y != null ? opts.y : -40 - Math.random() * 120;
+    if (opts.tx != null) {
+      var dx = Math.cos(ang), dy = Math.sin(ang);
+      // 沿飞行方向反推,到屏幕上边或右边之外 30px 处作为起点
+      var back = Math.min((opts.ty + 30) / dy, (W + 30 - opts.tx) / -dx);
+      x = opts.tx - dx * back; y = opts.ty - dy * back;
+    }
+    meteors.push({
+      x: x, y: y,
+      vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed,
+      len: opts.len || (90 + Math.random() * 130),
+      w: opts.w || (1 + Math.random() * 1.2),
+      text: opts.text || '', age: 0                    // age 用于愿望文字的淡出
+    });
+  }
+
+  // 绘制单颗流星:渐变拖尾 + 头部光晕 + (可选)愿望文字
+  function drawMeteor(m) {
+    var d = Math.hypot(m.vx, m.vy);
+    var tx = m.x - (m.vx / d) * m.len, ty = m.y - (m.vy / d) * m.len;   // 尾部终点
+    // 拖尾:头亮尾淡
+    var g = ctx.createLinearGradient(m.x, m.y, tx, ty);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.3, 'rgba(210,220,255,0.35)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.strokeStyle = g; ctx.lineWidth = m.w; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(tx, ty); ctx.stroke();
+    // 头部光晕
+    var h = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.w * 5);
+    h.addColorStop(0, 'rgba(255,255,255,0.95)');
+    h.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = h;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.w * 5, 0, 6.283); ctx.fill();
+    // 用户输入的愿望文字(显示方式来自 star.html:沿尾巴方向旋转、蓝色发光)
+    if (m.text) {
+      var alpha = Math.max(0, 1 - m.age / 260);        // 随飞行时间逐渐淡出
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      ctx.rotate(Math.atan2(m.vy, m.vx) + Math.PI);
+      ctx.font = 'bold 12px Microsoft YaHei';
+      ctx.fillStyle = 'rgba(255,255,255,' + alpha + ')';
+      ctx.shadowBlur = 12; ctx.shadowColor = '#a0d8ff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(m.text, 20, -15);
+      ctx.restore();
+    }
+  }
+
+  /* ========== 主循环 ========== */
+  var last = 0, autoTimer = 0;
+  function frame(ts) {
+    var dt = Math.min((ts - last) / 16.67 || 1, 3); last = ts;   // 以 60fps 为 1 的时间步长,上限 3 防止切后台后跳变
+    ctx.clearRect(0, 0, W, H);
+    // 星星闪烁:亮度在 0.15 ~ 0.9 之间来回变化
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      s.a += s.v * dt;
+      if (s.a > 0.9 || s.a < 0.15) s.v = -s.v;
+      ctx.fillStyle = 'rgba(200,220,255,' + Math.max(0, s.a).toFixed(3) + ')';
+      ctx.fillRect(s.x, s.y, s.r, s.r);
+    }
+    // 自动生成流星:每次一批 3~5 颗(随机间隔,自动生成的流星同屏最多 16 颗)
+    autoTimer -= dt;
+    if (autoTimer <= 0 && meteors.length < 16) {
+      var batch = reduce ? 1 : 3 + Math.floor(Math.random() * 3);
+      for (var b = 0; b < batch; b++) spawn();
+      autoTimer = reduce ? 160 : 40 + Math.random() * 70;
+    }
+    // 更新并绘制流星,飞出屏幕后移除
+    for (var j = meteors.length - 1; j >= 0; j--) {
+      var m = meteors[j];
+      m.x += m.vx * dt; m.y += m.vy * dt; m.age += dt;
+      drawMeteor(m);
+      if (m.y > H + m.len || m.x < -m.len - 80) meteors.splice(j, 1);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /* ========== 点击夜空:几颗流星从屏幕外飞来,经过点击位置附近 ========== */
+  canvas.addEventListener('pointerdown', function(){
+  var n = reduce ? 1 : 3 + Math.floor(Math.random()*3);
+  for(var i=0;i<n;i++){
+    spawn();
+  }
+});
+
+  /* ========== 放飞愿望:输入框交互与事件绑定(来自 star.html) ========== */
+  var isProcessing = false, toastTimer = 0;   // isProcessing 防止短时间内重复提交
+  function makeWish(e) {
+    if (e) e.preventDefault();
+    if (isProcessing) return;
+    var text = input.value.trim(); if (!text) return;
+    isProcessing = true;
+    input.value = ''; input.blur();           // 清空并收起键盘
+    // 稍作延迟后放飞带字流星:从右上方飞入
+    setTimeout(function () {
+      spawn({ x: W * 0.55 + Math.random() * W * 0.45, y: -20, speed: 5, len: 200, w: 2.2, text: text });
+      isProcessing = false;
+    }, 200);
+    // 显示提示框,2.8 秒后自动收起(重复触发时重置计时)
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toast.classList.remove('show'); }, 2800);
+  }
+
+  btn.addEventListener('click', makeWish);   // 移动端即时响应,并阻止随后的重复 click
+  input.addEventListener('keypress', function (e) { if (e.key === 'Enter') makeWish(); });
+
+  /* ========== 启动 ========== */
+  window.addEventListener('resize', resize);
+  resize();
+  for (var k = 0; k < 3; k++) spawn();                 // 开场先备几颗流星,全部从屏幕外飞入
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
