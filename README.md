@@ -1,2 +1,27 @@
-# star-wish
-A star wish meteor animation webpage.一个基于 Canvas 的流星许愿网页
+# Star Wish
+
+一个基于 HTML5 Canvas 的流星许愿动画网页。
+
+## 功能特点
+
+- 流星动画效果
+- 星空背景
+- 点击交互效果
+- 毛玻璃风格 UI
+- 多设备屏幕适配
+
+## 项目说明
+
+这是一个用于学习、实验和个人分享的前端项目。
+
+部分内容由 AI 辅助开发，仅用于学习交流与个人使用。
+
+免责声明：
+本项目不用于商业用途，使用者需自行承担使用风险。
+
+## 技术栈
+
+- HTML
+- CSS
+- JavaScript
+- Canvas API
